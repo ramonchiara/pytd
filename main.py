@@ -119,8 +119,10 @@ if __name__ == '__main__':
     senha = config['SENHA']
 
     td = TesouroDireto()
-    res = td.login(cpf, senha)
-    titulos = td.get_titulos_investidos()
-    for titulo in titulos:
-        print(titulo)
-    td.logout()
+    if td.login(cpf, senha):
+        titulos = td.get_titulos_investidos()
+        for titulo in titulos:
+            print(titulo)
+        td.logout()
+    else:
+        print('Login sem sucesso.')
