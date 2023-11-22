@@ -1,6 +1,7 @@
 from bs4 import BeautifulSoup
 from dotenv import dotenv_values
 import json
+import pandas as pd
 import requests
 
 
@@ -19,8 +20,8 @@ class TesouroDireto:
     def _get_initial_page(self):
         url = TesouroDireto._base_url
         response = requests.get(url)
-        assert response.status_code == 200
-        assert response.text.find('name="UserCpf"') != -1
+        assert response.status_code == 200, 'Página inicial não retornou 200.'
+        assert response.text.find('name="Cpf"') != -1, 'Página inicial não tem o campo CPF.'
         self._cookies = response.cookies
         self._token = TesouroDireto._extract_verification_token(response)
 
@@ -32,20 +33,24 @@ class TesouroDireto:
 
     def _send_cpf(self, cpf):
         url = TesouroDireto._base_url + '/login/deve-exibir-captcha'
-        data = {'UserCpf': cpf, '__RequestVerificationToken': self._token}
-        response = requests.post(url, cookies=self._cookies, data=data)
-        assert response.status_code == 200
+        headers = {'__requestverificationtoken': self._token, 'X-Requested-With': 'XMLHttpRequest'}
+        data = {'userCpf': cpf, '__RequestVerificationToken': self._token}
+        response = requests.post(url, cookies=self._cookies, headers=headers, data=data)
+        assert response.status_code == 200, 'Envio do CPF não retornou 200.'
         response_values = json.loads(response.text)
-        assert response_values.get('Success')
-        assert response_values.get('ErrorMessage') is None
-        assert not response_values.get('MustShowCaptcha')
+        assert response_values.get('Success'), 'Envio do CPF retornou sem sucesso.'
+        assert response_values.get('ErrorMessage') is None, 'Envio do CPF retornou erro.'
+        assert not response_values.get('MustShowCaptcha'), 'Envio do CPF retornou pedindo CAPTCHA.'
 
     def _send_senha(self, cpf, senha):
         url = TesouroDireto._base_url + '/Login/validateLogin'
         headers = {'X-Requested-With': 'XMLHttpRequest'}
-        data = {'UserCpf': cpf, 'UserPassword': senha, '__RequestVerificationToken': self._token}
+        data = {'userCpf': cpf, 'userPassword': senha, '__RequestVerificationToken': self._token}
         response = requests.post(url, cookies=self._cookies, headers=headers, data=data)
-        assert response.status_code == 200
+        assert response.status_code == 200, 'Envio da senha não retornou 200.'
+        response_values = json.loads(response.text)
+        assert response_values.get('Success'), 'Envio da senha retornou sem sucesso.'
+        assert response_values.get('RedirectTo') == '/MeusInvestimentos', 'Envio da senha retornou com redirect não esperado.'
         self._cookies = response.cookies
         self._logged = True
 
@@ -53,9 +58,9 @@ class TesouroDireto:
         self._verify_logged()
         url = TesouroDireto._base_url + '/MeusInvestimentos'
         response = requests.get(url, cookies=self._cookies)
-        assert response.status_code == 200
-        assert response.text.find('id="usuario"') != -1
-        assert response.text.find('action="/Login/Logout"') != -1
+        assert response.status_code == 200, 'Página de investimentos não retornou 200.'
+        assert response.text.find('id="usuario"') != -1, 'Página de investimentos não tem o id esperado.'
+        assert response.text.find('action="/Login/Logout"') != -1, 'Página de investimentos não tem a action esperada.'
         soup = BeautifulSoup(response.text, 'html.parser')
         table_container = soup.find(id='table-container_1')
         titulos = self._extract_titulos(table_container)
@@ -68,7 +73,7 @@ class TesouroDireto:
             url_titulo = link.get('href')
             url = TesouroDireto._base_url + url_titulo
             response = requests.get(url, cookies=self._cookies)
-            assert response.status_code == 200
+            assert response.status_code == 200, 'Detalhes do investimento não retornou 200.'
             soup = BeautifulSoup(response.text, 'html.parser')
             nome = soup.find('h1', {'class': 'td-meus-investimentos-detalhe__titulo_card'}).text.strip()
             vencimento = soup.select('tr.saldo-table-vencimento th strong')[0].text[-10:]
@@ -103,26 +108,29 @@ class TesouroDireto:
         self._verify_logged()
         url = TesouroDireto._base_url + '/Login/Logout'
         response = requests.post(url, cookies=self._cookies, allow_redirects=False)
-        assert response.status_code == 302
-        assert response.headers.get('Location') == '/'
+        assert response.status_code == 302, 'Logout não retornou 302.'
+        assert response.headers.get('Location') == '/', 'Logout não retornou redirecionamento esperado.'
         del self._cookies
         self._logged = False
 
     def _verify_logged(self):
         if not self._logged:
-            raise RuntimeError('Você não está logado!')
+            raise RuntimeError('Usuário não está logado.')
 
 
 if __name__ == '__main__':
-    config = dotenv_values(".env")
-    cpf = config['CPF']
-    senha = config['SENHA']
+    try:
+        config = dotenv_values('.env')
+        cpf = config['CPF']
+        senha = config['SENHA']
 
-    td = TesouroDireto()
-    if td.login(cpf, senha):
-        titulos = td.get_titulos_investidos()
-        for titulo in titulos:
-            print(titulo)
-        td.logout()
-    else:
-        print('Login sem sucesso.')
+        td = TesouroDireto()
+        if td.login(cpf, senha):
+            titulos = td.get_titulos_investidos()
+            df = pd.DataFrame().from_dict(titulos)
+            df.to_csv('investimentos_td.csv', sep=';')
+            td.logout()
+        else:
+            print('Login sem sucesso.')
+    except AssertionError as ex:
+        print(f'Erro inesperado! Talvez o site tenha sido reestruturado: {ex}')
